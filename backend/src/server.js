@@ -3,11 +3,24 @@ const express = require('express');
 const cors = require('cors');
 const { createDb } = require('./db');
 const buildQueries = require('./queries');
+const { seedDatabase } = require('./seed');
 
 const PORT = process.env.PORT || 4000;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'taskflow.db');
 
 const db = createDb(DB_PATH);
+
+// Auto-seed on boot if the database has no boards yet. This covers hosts
+// (like Render's free tier) where there's no shell access to run
+// `npm run seed` manually, and it's a no-op once data already exists.
+const boardCount = db.prepare('SELECT COUNT(*) AS count FROM boards').get().count;
+if (boardCount === 0) {
+  const result = seedDatabase(db);
+  console.log(
+    `No boards found — auto-seeded board #${result.boardId} ("TaskFlow Demo Board") with 3 columns and ${result.seedTasks.length} tasks.`
+  );
+}
+
 const queries = buildQueries(db);
 
 const app = express();
