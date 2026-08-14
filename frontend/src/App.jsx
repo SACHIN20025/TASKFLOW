@@ -13,7 +13,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [priorityFilter, setPriorityFilter] = useState('All');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchTerm, setSearchTerm] = useState(''); // debounced version of searchInput
   const [filteredByColumn, setFilteredByColumn] = useState(null);
+
+  // Debounce the search box so we're not hitting the API on every keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => setSearchTerm(searchInput.trim()), 300);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   const loadBoard = useCallback(async () => {
     try {
@@ -31,18 +39,18 @@ export default function App() {
     loadBoard();
   }, [loadBoard]);
 
-  // When the priority filter changes (or the board reloads), fetch the
-  // filtered task list from the backend (a real WHERE + ORDER BY query,
-  // not just client-side filtering of everything).
+  // When the priority filter or search term changes (or the board reloads),
+  // fetch the filtered task list from the backend (a real WHERE + ORDER BY
+  // query, not just client-side filtering of everything already fetched).
   useEffect(() => {
     if (!board) return;
-    if (priorityFilter === 'All') {
+    if (priorityFilter === 'All' && !searchTerm) {
       setFilteredByColumn(null);
       return;
     }
     let cancelled = false;
     api
-      .getTasks(BOARD_ID, priorityFilter)
+      .getTasks(BOARD_ID, { priority: priorityFilter, search: searchTerm })
       .then((tasks) => {
         if (cancelled) return;
         const grouped = {};
@@ -58,7 +66,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [priorityFilter, board]);
+  }, [priorityFilter, searchTerm, board]);
 
   async function runMutation(action) {
     try {
@@ -88,7 +96,17 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>{board.name}</h1>
-        <FilterBar value={priorityFilter} onChange={setPriorityFilter} />
+        <div className="header-controls">
+          <input
+            type="search"
+            className="search-input"
+            placeholder="Search tasks by title…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            aria-label="Search tasks by title"
+          />
+          <FilterBar value={priorityFilter} onChange={setPriorityFilter} />
+        </div>
       </header>
 
       {error && (

@@ -153,6 +153,36 @@ module.exports = function buildQueries(db) {
     return stmtAllTasksForBoard.all(boardId);
   }
 
+  // Text search by title (nice-to-have from the spec), optionally combined
+  // with a priority filter. Built dynamically since the WHERE clause is
+  // conditional, but still parameterized (no string-concatenated values).
+  function searchTasksByTitle(boardId, searchTerm, priority) {
+    const term = (searchTerm || '').trim();
+    if (!term) return getAllTasksForBoard(boardId);
+
+    const clauses = ['columns.board_id = ?', 'tasks.title LIKE ? ESCAPE \'\\\''];
+    // Escape SQLite LIKE wildcards (% and _) that might appear in the search term itself.
+    const escaped = term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    const params = [boardId, `%${escaped}%`];
+
+    if (priority) {
+      if (!VALID_PRIORITIES.includes(priority)) {
+        throw httpError(400, `Priority must be one of: ${VALID_PRIORITIES.join(', ')}`);
+      }
+      clauses.push('tasks.priority = ?');
+      params.push(priority);
+    }
+
+    const sql = `
+      SELECT tasks.*
+      FROM tasks
+      JOIN columns ON columns.id = tasks.column_id
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY tasks.created_at DESC, tasks.id DESC
+    `;
+    return db.prepare(sql).all(...params);
+  }
+
   return {
     getBoardWithColumnsAndTasks,
     getTaskById,
@@ -163,5 +193,6 @@ module.exports = function buildQueries(db) {
     getTaskCountsPerColumn,
     getTasksByPriority,
     getAllTasksForBoard,
+    searchTasksByTitle,
   };
 };

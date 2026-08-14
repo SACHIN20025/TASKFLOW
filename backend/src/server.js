@@ -5,7 +5,7 @@ const { createDb } = require('./db');
 const buildQueries = require('./queries');
 
 const PORT = process.env.PORT || 4000;
-const DB_PATH = path.join(__dirname, '..', 'data', 'taskflow.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'taskflow.db');
 
 const db = createDb(DB_PATH);
 const queries = buildQueries(db);
@@ -37,16 +37,23 @@ app.get(
   })
 );
 
-// Flat list of a board's tasks, optionally filtered by priority.
-// Backed by getTasksByPriority (WHERE + ORDER BY) or getAllTasksForBoard.
+// Flat list of a board's tasks, optionally filtered by priority and/or a
+// title search term (both may be combined).
 app.get(
   '/api/boards/:id/tasks',
   route((req, res) => {
     const boardId = Number(req.params.id);
-    const { priority } = req.query;
-    const tasks = priority
-      ? queries.getTasksByPriority(boardId, priority)
-      : queries.getAllTasksForBoard(boardId);
+    const { priority, search } = req.query;
+
+    let tasks;
+    if (search) {
+      tasks = queries.searchTasksByTitle(boardId, search, priority || undefined);
+    } else if (priority) {
+      tasks = queries.getTasksByPriority(boardId, priority);
+    } else {
+      tasks = queries.getAllTasksForBoard(boardId);
+    }
+
     res.json(tasks);
   })
 );

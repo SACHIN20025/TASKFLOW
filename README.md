@@ -1,7 +1,8 @@
 # TaskFlow
 
 A small full-stack task board (Trello-style): a Board with Columns, each holding Tasks with a
-title, optional description, priority, and status (which column they're in).
+title, optional description, priority, and status (which column they're in). Supports filtering by
+priority and searching by title, both backed by real database queries.
 
 - **Frontend:** React (Vite, JavaScript)
 - **Backend:** Node.js + Express
@@ -19,12 +20,14 @@ taskflow/
       server.js             # Express app / routes
       seed.js                # resets and populates demo data
     tests/
-      queries.test.js         # backend tests (node's built-in test runner)
+      queries.test.js         # backend tests against small ad-hoc fixtures
+      seed-data.test.js        # backend tests against the real seed dataset
     data/                      # taskflow.db lives here once created (gitignored)
   frontend/
+    .env.example                 # VITE_API_URL — only needed for deployment
     src/
       api.js               # fetch wrapper for the backend API
-      App.jsx               # top-level state (board, filter, error banner)
+      App.jsx               # top-level state (board, filter, search, error banner)
       components/
         Column.jsx, TaskCard.jsx, TaskForm.jsx, FilterBar.jsx
       styles.css
@@ -67,7 +70,12 @@ npm test
 ```
 
 Uses Node's built-in test runner (`node --test`) against an **in-memory** SQLite database, so it
-never touches `data/taskflow.db`.
+never touches `data/taskflow.db`. This runs both test files:
+- `queries.test.js` — small, purpose-built fixtures for each behavior (e.g. an empty-title task).
+- `seed-data.test.js` — calls the *actual* `seedDatabase()` function from `src/seed.js` (the same
+  code `npm run seed` runs) and asserts the DB-layer queries return the right rows for that real
+  seed data, e.g. "3 tasks in To Do, 2 in In Progress, 2 in Done" and "2 High priority tasks,
+  newest first."
 
 ## Database schema
 
@@ -130,12 +138,27 @@ ORDER BY tasks.created_at DESC, tasks.id DESC
 Both are exercised by real HTTP endpoints (`GET /api/boards/:id/counts` and
 `GET /api/boards/:id/tasks?priority=High`), not just filtered client-side after fetching everything.
 
+**Also implemented (nice-to-have): text search by title** (`searchTasksByTitle`) — a parameterized
+`LIKE` search, combinable with the priority filter, scoped to a board the same way as query 2:
+
+```sql
+SELECT tasks.*
+FROM tasks
+JOIN columns ON columns.id = tasks.column_id
+WHERE columns.board_id = ? AND tasks.title LIKE ? ESCAPE '\'
+  [AND tasks.priority = ?]   -- only when a priority filter is also active
+ORDER BY tasks.created_at DESC, tasks.id DESC
+```
+
+`%` and `_` in the user's search term are escaped before being embedded in the `LIKE` pattern, so a
+literal `%` typed by the user is searched for literally rather than acting as a wildcard.
+
 ## API summary
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/boards/:id` | Board with nested columns + tasks |
-| GET | `/api/boards/:id/tasks?priority=High` | Flat task list, optionally filtered |
+| GET | `/api/boards/:id/tasks?priority=High&search=schema` | Flat task list, optionally filtered by priority and/or title search (combinable) |
 | GET | `/api/boards/:id/counts` | Task count per column |
 | POST | `/api/tasks` | Create a task (`columnId`, `title`, `description?`, `priority?`) |
 | PUT | `/api/tasks/:id` | Edit a task |
@@ -157,9 +180,11 @@ code, which the frontend surfaces as a dismissible banner instead of a blank scr
 - **Stretch goal picked: task count per column**, shown in each column header. It's driven by the
   `GROUP BY` query above rather than `column.tasks.length` on the frontend, so it stays correct
   even when the priority filter is hiding some tasks (the count still shows the true total).
-- **Priority filter hits the backend**, not just `.filter()` on already-fetched data — partly to
-  exercise the second required query for real, partly because it's the more honest version of
-  "filtering" for a real app with more tasks than fit in memory.
+- **Priority filter and title search both hit the backend**, not just `.filter()` on already-fetched
+  data — partly to exercise the required queries for real, partly because it's the more honest
+  version of "filtering" for a real app with more tasks than fit in memory. They're combinable
+  (search "auth" within High priority tasks, for example), and the search box is debounced 300ms
+  so it's not firing a request on every keystroke.
 - **`created_at` is stored as SQLite's `datetime('now')` (UTC, second precision).** The frontend
   appends `Z` before parsing so dates display in the browser's local time zone rather than being
   misread as local time.
@@ -168,13 +193,52 @@ code, which the frontend surfaces as a dismissible banner instead of a blank scr
 
 ## What I'd improve with more time
 
-- Drag-and-drop for moving tasks (kept as the one stretch goal I didn't do).
-- Text search by title (the other listed nice-to-have).
+- Drag-and-drop for moving tasks (kept as the one stretch goal I didn't do — text search ended up
+  implemented too, alongside the column-count stretch goal, since both were small once the query
+  layer existed).
 - Optimistic UI updates instead of refetching the whole board after every mutation — currently
   simple and correct, but a bit chattier than necessary.
 - Board/column management (rename a column, add a new one, reorder columns).
 - A few more edge-case tests (e.g. deleting a task that doesn't exist, updating with only a
   partial payload).
+
+## Deploying
+
+The backend is a plain Express app and the frontend is a static Vite build, so they deploy to
+separate hosts. Below is a free-tier path using Render (backend) + Vercel (frontend) — any similar
+hosts (Railway, Fly.io, Netlify, etc.) work the same way.
+
+### Backend → Render
+
+1. Push this repo to GitHub, then in Render: **New → Web Service**, point it at the repo, set
+   **Root Directory** to `backend`.
+2. Build command: `npm install`. Start command: `npm start`.
+3. SQLite writes to a file, and Render's default filesystem is **ephemeral** (wiped on every
+   deploy/restart) — so add a **persistent disk**: Render dashboard → your service → *Disks* → add
+   a disk mounted at `/data`.
+4. Set an environment variable `DB_PATH=/data/taskflow.db` (the server and seed script both read
+   this — see `server.js` / `seed.js`) so the database lives on that persistent disk instead of the
+   ephemeral one.
+5. After the first deploy, open the Render **Shell** for the service and run `npm run seed` once to
+   populate the demo board.
+6. Render assigns a public URL like `https://taskflow-api-xxxx.onrender.com` — that's your API base
+   (the app already listens on `process.env.PORT`, which Render sets automatically).
+
+### Frontend → Vercel
+
+1. In Vercel: **New Project**, point it at the repo, set **Root Directory** to `frontend`.
+2. Framework preset: Vite. Build command: `npm run build`. Output directory: `dist` (Vercel usually
+   detects these automatically).
+3. Add an environment variable `VITE_API_URL` set to your Render URL **plus `/api`**, e.g.
+   `https://taskflow-api-xxxx.onrender.com/api` (see `frontend/.env.example`).
+4. Deploy. Vercel gives you a public URL for the UI.
+
+### Notes
+
+- CORS is wide open (`cors()` with no options) in `server.js`, which is fine for this assignment
+  but is the first thing to lock down (to the deployed frontend's origin) in a real product.
+- Render's free tier spins down after inactivity, so the first request after idling can take
+  10–20 seconds to wake back up — that's expected, not a bug.
 
 ## Time spent
 

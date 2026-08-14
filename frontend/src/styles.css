@@ -45,6 +45,22 @@ body {
   margin: 0;
 }
 
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.search-input {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  min-width: 220px;
+}
+
 .filter-bar {
   display: flex;
   align-items: center;
